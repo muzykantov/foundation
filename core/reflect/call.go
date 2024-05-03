@@ -51,15 +51,16 @@ func Call(input any, methodName string, args ...string) ([]reflect.Value, error)
 		argInterface := argValue.Interface()
 
 		if json.Valid(argRaw) {
+			var err error
 			if protoMessage, ok := argInterface.(proto.Message); ok {
-				if err := protojson.Unmarshal(argRaw, protoMessage); err != nil {
-					return nil, fmt.Errorf("unmarshal JSON for type %s: %w", argType.Name(), err)
-				}
+				err = protojson.Unmarshal(argRaw, protoMessage)
 			} else {
-				if err := json.Unmarshal(argRaw, argInterface); err != nil {
-					return nil, fmt.Errorf("unmarshal JSON for type %s: %w", argType.Name(), err)
-				}
+				err = json.Unmarshal(argRaw, argInterface)
 			}
+			if err != nil {
+				return nil, fmt.Errorf("unmarshal JSON for type %s: %w", argType.Name(), err)
+			}
+
 			continue
 		}
 
@@ -67,6 +68,7 @@ func Call(input any, methodName string, args ...string) ([]reflect.Value, error)
 			if err := unmarshaler.UnmarshalText(argRaw); err != nil {
 				return nil, fmt.Errorf("unmarshal text for type %s: %w", argType.Name(), err)
 			}
+
 			continue
 		}
 
@@ -74,6 +76,7 @@ func Call(input any, methodName string, args ...string) ([]reflect.Value, error)
 			if err := proto.Unmarshal(argRaw, protoMessage); err != nil {
 				return nil, fmt.Errorf("unmarshal protobuf for type %s: %w", argType.Name(), err)
 			}
+
 			continue
 		}
 
@@ -81,6 +84,7 @@ func Call(input any, methodName string, args ...string) ([]reflect.Value, error)
 			if err := unmarshaler.UnmarshalBinary(argRaw); err != nil {
 				return nil, fmt.Errorf("unmarshal binary for type %s: %w", argType.Name(), err)
 			}
+
 			continue
 		}
 
@@ -88,6 +92,7 @@ func Call(input any, methodName string, args ...string) ([]reflect.Value, error)
 			if err := decoder.GobDecode(argRaw); err != nil {
 				return nil, fmt.Errorf("gob decode for type %s: %w", argType.Name(), err)
 			}
+
 			continue
 		}
 
