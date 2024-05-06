@@ -34,7 +34,7 @@ func (t *TestStruct2) Method5(in []float64) {
 	fmt.Printf("in: %+v\n", in)
 }
 
-func TestCallMethodByName(t *testing.T) {
+func TestCall(t *testing.T) {
 	input := &TestStruct2{}
 
 	a := &proto.Address{
