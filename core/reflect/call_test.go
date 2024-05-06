@@ -56,6 +56,7 @@ func TestCallMethodByName(t *testing.T) {
 	resp3, err3 := Call(input, "Method3", string(aJSON))
 	require.NoError(t, err3)
 	require.Len(t, resp3, 1)
+	require.Equal(t, resp3[0].(string), a.AddrString())
 
 	aRaw, _ := pb.Marshal(a)
 
