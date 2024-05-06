@@ -11,6 +11,16 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// Call invokes a method on a given value with the provided arguments and returns the output of the method.
+//
+// Parameters:
+// - v: The value on which the method is invoked.
+// - method: The name of the method to be invoked.
+// - args: The arguments to be passed to the method.
+//
+// Returns:
+// - []any: The output of the method as a slice of any type.
+// - error: An error if the method is not found or if the number of arguments is incorrect.
 func Call(v any, method string, args ...string) ([]any, error) {
 	inputVal := reflect.ValueOf(v)
 
