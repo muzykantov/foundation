@@ -22,8 +22,10 @@ func Count(v any, method string, d Direction) int {
 	switch d {
 	case Input:
 		return methodType.NumIn()
+
 	case Output:
 		return methodType.NumOut()
+
 	default:
 		return -1
 	}
