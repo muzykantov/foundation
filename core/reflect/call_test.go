@@ -11,39 +11,31 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
-type Test struct{}
+type TestStruct2 struct{}
 
-func (t *Test) Method1(ts *time.Time) {
+func (t *TestStruct2) Method1(ts *time.Time) {
 	fmt.Printf("ts: %v\n", ts)
 }
 
-func (t *Test) Method2(ts time.Time) {
+func (t *TestStruct2) Method2(ts time.Time) {
 	fmt.Printf("ts: %v\n", ts)
 }
 
-func (t *Test) Method3(a *proto.Address) string {
+func (t *TestStruct2) Method3(a *proto.Address) string {
 	fmt.Printf("a: %+v\n", a)
 	return a.AddrString()
 }
 
-func (t *Test) Method4(in float64) {
+func (t *TestStruct2) Method4(in float64) {
 	fmt.Printf("in: %+v\n", in)
 }
 
-func (t *Test) Method5(in []float64) {
+func (t *TestStruct2) Method5(in []float64) {
 	fmt.Printf("in: %+v\n", in)
 }
 
 func TestCallMethodByName(t *testing.T) {
-	input := &Test{}
-
-	resp1, err1 := Call(input, "Method1", time.Now().Format(time.RFC3339))
-	require.NoError(t, err1)
-	require.Len(t, resp1, 0)
-
-	resp2, err2 := Call(input, "Method2", time.Now().Format(time.RFC3339))
-	require.NoError(t, err2)
-	require.Len(t, resp2, 0)
+	input := &TestStruct2{}
 
 	a := &proto.Address{
 		UserID:       "1234",
@@ -52,27 +44,80 @@ func TestCallMethodByName(t *testing.T) {
 		IsMultisig:   false,
 	}
 	aJSON, _ := protojson.Marshal(a)
-
-	resp3, err3 := Call(input, "Method3", string(aJSON))
-	require.NoError(t, err3)
-	require.Len(t, resp3, 1)
-	require.Equal(t, resp3[0].(string), a.AddrString())
-
 	aRaw, _ := pb.Marshal(a)
 
-	resp3, err3 = Call(input, "Method3", string(aRaw))
-	require.NoError(t, err3)
-	require.Len(t, resp3, 1)
+	tests := []struct {
+		name      string
+		method    string
+		arg       string
+		wantLen   int
+		wantErr   bool
+		wantValue any
+	}{
+		{
+			name:    "Method1 with correct time format",
+			method:  "Method1",
+			arg:     time.Now().Format(time.RFC3339),
+			wantLen: 0,
+			wantErr: false,
+		},
+		{
+			name:    "Method2 with correct time format",
+			method:  "Method2",
+			arg:     time.Now().Format(time.RFC3339),
+			wantLen: 0,
+			wantErr: false,
+		},
+		{
+			name:      "Method3 with JSON",
+			method:    "Method3",
+			arg:       string(aJSON),
+			wantLen:   1,
+			wantErr:   false,
+			wantValue: a.AddrString(),
+		},
+		{
+			name:    "Method3 with Protobuf",
+			method:  "Method3",
+			arg:     string(aRaw),
+			wantLen: 1,
+			wantErr: false,
+		},
+		{
+			name:    "Method4 with float input",
+			method:  "Method4",
+			arg:     "1234.5678",
+			wantLen: 0,
+			wantErr: false,
+		},
+		{
+			name:    "Method5 with array input",
+			method:  "Method5",
+			arg:     "[1234.5678, 1234.5678]",
+			wantLen: 0,
+			wantErr: false,
+		},
+		{
+			name:    "Method5 with incorrect format",
+			method:  "Method5",
+			arg:     "1234.5678, 1234.5678",
+			wantLen: 0,
+			wantErr: true,
+		},
+	}
 
-	resp4, err4 := Call(input, "Method4", "1234.5678")
-	require.NoError(t, err4)
-	require.Len(t, resp4, 0)
-
-	resp5, err5 := Call(input, "Method5", "[1234.5678, 1234.5678]")
-	require.NoError(t, err5)
-	require.Len(t, resp5, 0)
-
-	resp5, err5 = Call(input, "Method5", "1234.5678, 1234.5678")
-	require.Error(t, err5)
-	require.Len(t, resp5, 0)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := Call(input, tt.method, tt.arg)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Len(t, resp, tt.wantLen)
+			if tt.wantValue != nil {
+				require.Equal(t, tt.wantValue, resp[0])
+			}
+		})
+	}
 }
