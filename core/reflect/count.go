@@ -2,31 +2,21 @@ package reflect
 
 import "reflect"
 
-// Count returns the number of input or output parameters of the method specified by the given name.
+// Count counts the number of input and output parameters of a method in a given value.
 //
 // Parameters:
-// - v: the value to check the method on.
-// - method: the name of the method.
-// - d: the direction to count in (Input or Output).
+// - v: The value in which the method is located.
+// - method: The name of the method.
 //
 // Returns:
-// - int: the number of input or output parameters of the method, or -1 if the method is not found.
-func Count(v any, method string, d Direction) int {
+// - in: The number of input parameters of the method.
+// - out: The number of output parameters of the method.
+func Count(v any, method string) (in int, out int) {
 	methodVal := reflect.ValueOf(v).MethodByName(method)
 	if !methodVal.IsValid() {
-		return -1
+		return -1, -1
 	}
 
 	methodType := methodVal.Type()
-
-	switch d {
-	case Input:
-		return methodType.NumIn()
-
-	case Output:
-		return methodType.NumOut()
-
-	default:
-		return -1
-	}
+	return methodType.NumIn(), methodType.NumOut()
 }

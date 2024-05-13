@@ -10,9 +10,11 @@ import (
 	"os"
 	"reflect"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/anoideaopen/foundation/core/balance"
+	corereflect "github.com/anoideaopen/foundation/core/reflect"
 	"github.com/anoideaopen/foundation/core/telemetry"
 	"github.com/anoideaopen/foundation/core/types"
 	"github.com/anoideaopen/foundation/hlfcreator"
@@ -156,8 +158,6 @@ type chaincodeOptions struct {
 type ChainCode struct {
 	contract BaseContractInterface // Contract interface containing the chaincode logic.
 	tls      shim.TLSProperties    // TLS configuration properties.
-	// methods stores contract public methods, filled through parseContractMethods.
-	methods ContractMethods
 }
 
 // WithSrcFS is a ChaincodeOption that specifies the source file system to be used by the ChainCode.
@@ -380,10 +380,6 @@ func (cc *ChainCode) Init(stub shim.ChaincodeStubInterface) peer.Response {
 		}
 	}
 
-	if err = validateContractMethods(cc.contract); err != nil {
-		return shim.Error("init: validating contract methods: " + err.Error())
-	}
-
 	if c, ok := cc.contract.(ContractConfigurable); ok {
 		if err = c.ValidateConfig(cfgBytes); err != nil {
 			return shim.Error(fmt.Sprintf("init: validating base config: %s", err))
@@ -491,14 +487,6 @@ func (cc *ChainCode) Invoke(stub shim.ChaincodeStubInterface) (r peer.Response) 
 		return shim.Error(errMsg)
 	}
 
-	span.AddEvent("parsing contract methods")
-	cc.methods, err = parseContractMethods(cc.contract)
-	if err != nil {
-		errMsg := "invoke: parsing contract methods: " + err.Error()
-		span.SetStatus(codes.Error, errMsg)
-		return shim.Error(errMsg)
-	}
-
 	// it is probably worth checking if the function is not locked before it is executed.
 	// You should also check with swap and multiswap locking and
 	// display the error explicitly instead of saying that the function was not found.
@@ -557,21 +545,42 @@ func (cc *ChainCode) Invoke(stub shim.ChaincodeStubInterface) (r peer.Response) 
 		}
 	}
 
-	method, err := cc.methods.Method(functionName)
-	if err != nil {
-		errMsg := "invoke: finding method: " + err.Error()
+	method, batched := cc.find(functionName)
+	if method == "" {
+		errMsg := "invoke: finding method: " + corereflect.ErrMethodNotFound.Error()
 		span.SetStatus(codes.Error, errMsg)
 		return shim.Error(errMsg)
 	}
 
 	// handle invoke and query methods executed without batch process
-	if method.noBatch {
+	if batched {
 		span.SetAttributes(telemetry.MethodType(telemetry.MethodNbTx))
-		return cc.noBatchHandler(traceCtx, stub, functionName, method, arguments, cfgBytes)
+		// 	return cc.noBatchHandler(traceCtx, stub, functionName, method, arguments, cfgBytes)
 	}
 
 	// handle invoke method with batch process
 	return cc.BatchHandler(traceCtx, stub, functionName, method, arguments)
+}
+
+func (cc *ChainCode) find(fn string) (string, bool) {
+	fn = strings.ToUpper(string(fn[0])) + fn[1:] // capitalize first letter of function name
+
+	query := fmt.Sprintf("Query%s", fn)
+	if _, out := corereflect.Count(cc, query); out == 1 || out == 2 { // return value and/or error
+		return query, true
+	}
+
+	tx := fmt.Sprintf("Tx%s", fn)
+	if _, out := corereflect.Count(cc, tx); out == 1 || out == 2 { // return value and/or error
+		return tx, false
+	}
+
+	nbTx := fmt.Sprintf("NbTx%s", fn)
+	if _, out := corereflect.Count(cc, nbTx); out == 1 || out == 2 { // return value and/or error
+		return nbTx, true
+	}
+
+	return "", false
 }
 
 // ValidateTxID validates the transaction ID to ensure it is correctly formatted.
@@ -605,29 +614,25 @@ func (cc *ChainCode) ValidateTxID(stub shim.ChaincodeStubInterface) error {
 func (cc *ChainCode) BatchHandler(
 	traceCtx telemetry.TraceContext,
 	stub shim.ChaincodeStubInterface,
+	methodName string,
 	funcName string,
-	fn *Fn,
 	args []string,
 ) peer.Response {
 	traceCtx, span := cc.contract.TracingHandler().StartNewSpan(traceCtx, "chaincode.BatchHandler")
 	defer span.End()
 
 	span.AddEvent("validating sender")
-	sender, args, nonce, err := cc.validateAndExtractInvocationContext(stub, fn, funcName, args)
+	sender, args, nonce, err := cc.validateAndExtractInvocationContext(stub, methodName, funcName, args)
 	if err != nil {
 		span.SetStatus(codes.Error, "validating sender failed")
 		return shim.Error(err.Error())
 	}
-	span.AddEvent("prepare to save")
-	args, err = doPrepareToSave(stub, fn, args)
-	if err != nil {
-		span.SetStatus(codes.Error, "prepare to save failed")
-		return shim.Error(err.Error())
-	}
+
+	in, _ := corereflect.Count(cc.contract, methodName)
 
 	span.SetAttributes(attribute.String("preimage_tx_id", stub.GetTxID()))
 	span.AddEvent("save to batch")
-	if err = cc.saveToBatch(traceCtx, stub, funcName, fn, sender, args[:len(fn.in)], nonce); err != nil {
+	if err = cc.saveToBatch(traceCtx, stub, funcName, sender, args[:in], nonce); err != nil {
 		span.SetStatus(codes.Error, "save to batch failed")
 		return shim.Error(err.Error())
 	}
@@ -643,44 +648,44 @@ func (cc *ChainCode) BatchHandler(
 // If the function is marked as a 'query', it modifies the stub to ensure that no state changes are persisted.
 //
 // Returns a shim.Success response if the function invocation is successful. Otherwise, it returns a shim.Error response.
-func (cc *ChainCode) noBatchHandler(
-	traceCtx telemetry.TraceContext,
-	stub shim.ChaincodeStubInterface,
-	funcName string,
-	fn *Fn,
-	args []string,
-	cfgBytes []byte,
-) peer.Response {
-	traceCtx, span := cc.contract.TracingHandler().StartNewSpan(traceCtx, "chaincode.NoBatchHandler")
-	defer span.End()
+// func (cc *ChainCode) noBatchHandler(
+// 	traceCtx telemetry.TraceContext,
+// 	stub shim.ChaincodeStubInterface,
+// 	funcName string,
+// 	fn *Fn,
+// 	args []string,
+// 	cfgBytes []byte,
+// ) peer.Response {
+// 	traceCtx, span := cc.contract.TracingHandler().StartNewSpan(traceCtx, "chaincode.NoBatchHandler")
+// 	defer span.End()
 
-	if fn.query {
-		stub = newQueryStub(stub)
-	}
+// 	if fn.query {
+// 		stub = newQueryStub(stub)
+// 	}
 
-	span.AddEvent("validating sender")
-	sender, args, _, err := cc.validateAndExtractInvocationContext(stub, fn, funcName, args)
-	if err != nil {
-		span.SetStatus(codes.Error, "validating sender failed")
-		return shim.Error(err.Error())
-	}
-	span.AddEvent("prepare to save")
-	args, err = doPrepareToSave(stub, fn, args)
-	if err != nil {
-		span.SetStatus(codes.Error, "prepare to save failed")
-		return shim.Error(err.Error())
-	}
+// 	span.AddEvent("validating sender")
+// 	sender, args, _, err := cc.validateAndExtractInvocationContext(stub, fn, funcName, args)
+// 	if err != nil {
+// 		span.SetStatus(codes.Error, "validating sender failed")
+// 		return shim.Error(err.Error())
+// 	}
+// 	span.AddEvent("prepare to save")
+// 	args, err = doPrepareToSave(stub, fn, args)
+// 	if err != nil {
+// 		span.SetStatus(codes.Error, "prepare to save failed")
+// 		return shim.Error(err.Error())
+// 	}
 
-	span.AddEvent("calling method")
-	resp, err := cc.callMethod(traceCtx, stub, fn, sender, args, cfgBytes)
-	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		return shim.Error(err.Error())
-	}
+// 	span.AddEvent("calling method")
+// 	resp, err := cc.callMethod(traceCtx, stub, fn, sender, args, cfgBytes)
+// 	if err != nil {
+// 		span.SetStatus(codes.Error, err.Error())
+// 		return shim.Error(err.Error())
+// 	}
 
-	span.SetStatus(codes.Ok, "")
-	return shim.Success(resp)
-}
+// 	span.SetStatus(codes.Ok, "")
+// 	return shim.Success(resp)
+// }
 
 // batchExecuteHandler is responsible for executing a batch of transactions.
 // This handler is invoked when the chaincode function named "batchExecute" is called.
@@ -731,7 +736,7 @@ func (cc *ChainCode) batchExecuteHandler(
 func (cc *ChainCode) callMethod(
 	traceCtx telemetry.TraceContext,
 	stub shim.ChaincodeStubInterface,
-	method *Fn,
+	methodName string,
 	sender *proto.Address,
 	args []string,
 	cfgBytes []byte,
@@ -777,120 +782,6 @@ func (cc *ChainCode) callMethod(
 	}
 	span.SetStatus(codes.Ok, "")
 	return nil, nil
-}
-
-// doConvertToCall prepares the arguments for a chaincode method call by converting each
-// string argument to its expected Go type as defined in the method's 'in' field. It uses reflection
-// to dynamically convert arguments and checks if the number of provided arguments matches the expectation.
-//
-// It returns a slice of reflect.Value representing the converted arguments, and an error if
-// the conversion fails or if there is an incorrect number of arguments.
-func doConvertToCall(
-	stub shim.ChaincodeStubInterface,
-	method *Fn,
-	args []string,
-) ([]reflect.Value, error) {
-	found := len(args)
-	expected := len(method.in)
-	if found < expected {
-		return nil, fmt.Errorf(
-			"incorrect number of arguments, found %d but expected more than %d",
-			found,
-			expected,
-		)
-	}
-	// todo check is args enough
-	vArgs := make([]reflect.Value, len(method.in))
-	for i := range method.in {
-		var impl reflect.Value
-		if method.in[i].kind.Kind().String() == "ptr" {
-			impl = reflect.New(method.in[i].kind.Elem())
-		} else {
-			impl = reflect.New(method.in[i].kind).Elem()
-		}
-
-		res := method.in[i].convertToCall.Call([]reflect.Value{
-			impl,
-			reflect.ValueOf(stub), reflect.ValueOf(args[i]),
-		})
-
-		if res[1].Interface() != nil {
-			err, ok := res[1].Interface().(error)
-			if !ok {
-				return nil, errors.New(requireInterfaceErrMsg)
-			}
-			return nil, fmt.Errorf(
-				"failed to convert arg value '%s' to type '%s' on index '%d': %w",
-				args[i], impl.String(), i, err,
-			)
-		}
-		vArgs[i] = res[0]
-	}
-	return vArgs, nil
-}
-
-// doPrepareToSave prepares the arguments for storage by ensuring they are in the correct format.
-// It checks if there are enough arguments and uses either a custom 'prepareToSave' or 'convertToCall'
-// method defined in the method's 'in' field for conversion. It returns the processed arguments as a
-// slice of strings, and an error if the conversion fails or if there is an incorrect number of arguments.
-func doPrepareToSave(
-	stub shim.ChaincodeStubInterface,
-	method *Fn,
-	args []string,
-) ([]string, error) {
-	if len(args) < len(method.in) {
-		return nil, fmt.Errorf(
-			"incorrect number of arguments. current count of args is %d but expected more than %d",
-			len(args),
-			len(method.in),
-		)
-	}
-	as := make([]string, len(method.in))
-	for i := range method.in {
-		var impl reflect.Value
-		if method.in[i].kind.Kind().String() == "ptr" {
-			impl = reflect.New(method.in[i].kind.Elem())
-		} else {
-			impl = reflect.New(method.in[i].kind).Elem()
-		}
-
-		var ok bool
-		if method.in[i].prepareToSave.IsValid() {
-			res := method.in[i].prepareToSave.Call([]reflect.Value{
-				impl,
-				reflect.ValueOf(stub), reflect.ValueOf(args[i]),
-			})
-			if res[1].Interface() != nil {
-				err, ok := res[1].Interface().(error)
-				if !ok {
-					return nil, errors.New(requireInterfaceErrMsg)
-				}
-				return nil, err
-			}
-			as[i], ok = res[0].Interface().(string)
-			if !ok {
-				return nil, errors.New(requireInterfaceErrMsg)
-			}
-			continue
-		}
-
-		// if method PrepareToSave don't have exists
-		// use ConvertToCall to check converting
-		res := method.in[i].convertToCall.Call([]reflect.Value{
-			impl,
-			reflect.ValueOf(stub), reflect.ValueOf(args[i]),
-		})
-		if res[1].Interface() != nil {
-			err, ok := res[1].Interface().(error)
-			if !ok {
-				return nil, errors.New(requireInterfaceErrMsg)
-			}
-			return nil, err
-		}
-
-		as[i] = args[i] // in this case we don't convert argument
-	}
-	return as, nil
 }
 
 // copyContract creates a deep copy of a contract's interface. It uses reflection to copy each field

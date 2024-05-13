@@ -8,6 +8,7 @@ import (
 
 	"github.com/anoideaopen/foundation/core/gost"
 	"github.com/anoideaopen/foundation/core/helpers"
+	corereflect "github.com/anoideaopen/foundation/core/reflect"
 	"github.com/anoideaopen/foundation/core/types"
 	pb "github.com/anoideaopen/foundation/proto"
 	"github.com/btcsuite/btcutil/base58"
@@ -35,7 +36,7 @@ type invocationDetails struct {
 //
 // Parameters:
 //   - stub - interface to interact with the blockchain.
-//   - fnMetadata - metadata of the called method.
+//   - methodName - name of the called chaincode method.
 //   - fn - name of the called method.
 //   - args - arguments of the call.
 //
@@ -43,16 +44,18 @@ type invocationDetails struct {
 //   - User address, method call arguments, nonce and error, if any.
 func (cc *ChainCode) validateAndExtractInvocationContext(
 	stub shim.ChaincodeStubInterface,
-	fnMetadata *Fn,
+	methodName string,
 	fn string,
 	args []string,
 ) (sender *pb.Address, invocationArgs []string, nonce uint64, err error) {
 	// If authorization is not required, return the arguments unchanged.
-	if !fnMetadata.needsAuth {
+	if corereflect.Is(cc.contract, methodName, 0, false, &types.Address{}) {
 		return nil, args, 0, nil
 	}
 
-	invocationDetails, err := parseInvocationDetails(fnMetadata, args)
+	in, _ := corereflect.Count(cc.contract, methodName)
+
+	invocationDetails, err := parseInvocationDetails(in, args)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -144,7 +147,7 @@ func (cc *ChainCode) validateAndExtractInvocationContext(
 	}
 
 	// Return the signer's address, method arguments, and nonce.
-	return acl.GetAddress().GetAddress(), args[3 : 3+len(fnMetadata.in)], nonce, nil
+	return acl.GetAddress().GetAddress(), args[3 : 3+in], nonce, nil
 }
 
 func checkACLSignerStatus(stub shim.ChaincodeStubInterface, signers []string) (*pb.AclResponse, error) {
@@ -167,13 +170,13 @@ func checkACLSignerStatus(stub shim.ChaincodeStubInterface, signers []string) (*
 }
 
 func parseInvocationDetails(
-	fnMetadata *Fn,
+	methodInArgsCount int,
 	args []string,
 ) (*invocationDetails, error) {
 	// Calculating the positions of arguments in an array.
 	var (
-		expectedArgsCount = len(fnMetadata.in) + 4 // +4 for reqId, cc, ch, nonce
-		authArgsStartPos  = expectedArgsCount      // Authorization arguments start position
+		expectedArgsCount = methodInArgsCount + 4 // +4 for reqId, cc, ch, nonce
+		authArgsStartPos  = expectedArgsCount     // Authorization arguments start position
 	)
 
 	// We check that the number of arguments is not less than expected.

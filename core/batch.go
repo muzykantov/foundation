@@ -29,18 +29,12 @@ func (cc *ChainCode) saveToBatch(
 	traceCtx telemetry.TraceContext,
 	stub shim.ChaincodeStubInterface,
 	funcName string,
-	fn *Fn,
 	sender *proto.Address,
 	args []string,
 	nonce uint64,
 ) error {
 	logger := Logger()
 	txID := stub.GetTxID()
-
-	_, err := doConvertToCall(stub, fn, args)
-	if err != nil {
-		return fmt.Errorf("validate arguments. %w", err)
-	}
 
 	key, err := stub.CreateCompositeKey(config.BatchPrefix, []string{txID})
 	if err != nil {

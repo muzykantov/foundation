@@ -4,11 +4,20 @@ import (
 	"encoding"
 	"encoding/gob"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+)
+
+// Error types.
+var (
+	ErrMethodNotFound          = errors.New("method not found")
+	ErrIncorrectArgumentCount  = errors.New("incorrect number of arguments")
+	ErrUnsupportedArgumentType = errors.New("unsupported argument type")
+	ErrInvalidArgumentValue    = errors.New("invalid argument value")
 )
 
 // Call invokes a method on a given value with the provided arguments and returns the output of the method.

@@ -9,64 +9,55 @@ func (t TestStruct3) MethodB() (int, error)        { return 42, nil }
 func (t TestStruct3) MethodC(a, b string, c int)   {}
 
 func TestCount(t *testing.T) {
-	ts := TestStruct3{}
+	ts := &TestStruct3{}
 
 	tests := []struct {
-		name   string
-		v      any
-		method string
-		d      Direction
-		want   int
+		name    string
+		v       any
+		method  string
+		wantIn  int
+		wantOut int
 	}{
 		{
-			name:   "MethodA inputs count",
-			v:      ts,
-			method: "MethodA",
-			d:      Input,
-			want:   2, // x и y
+			name:    "MethodA inputs count",
+			v:       ts,
+			method:  "MethodA",
+			wantIn:  2,
+			wantOut: 1,
 		},
 		{
-			name:   "MethodA outputs count",
-			v:      ts,
-			method: "MethodA",
-			d:      Output,
-			want:   1, // bool
+			name:    "MethodB inputs count",
+			v:       ts,
+			method:  "MethodB",
+			wantIn:  0,
+			wantOut: 2,
 		},
 		{
-			name:   "MethodB inputs count",
-			v:      ts,
-			method: "MethodB",
-			d:      Input,
-			want:   0,
+			name:    "MethodC inputs count",
+			v:       ts,
+			method:  "MethodC",
+			wantIn:  3,
+			wantOut: 0,
 		},
 		{
-			name:   "MethodB outputs count",
-			v:      ts,
-			method: "MethodB",
-			d:      Output,
-			want:   2, // int и error
-		},
-		{
-			name:   "MethodC inputs count",
-			v:      ts,
-			method: "MethodC",
-			d:      Input,
-			want:   3, // a, b, и c
-		},
-		{
-			name:   "MethodC outputs count",
-			v:      ts,
-			method: "MethodC",
-			d:      Output,
-			want:   0,
+			name:    "MethodUnavailable outputs count",
+			v:       ts,
+			method:  "MethodUnavailable",
+			wantIn:  -1,
+			wantOut: -1,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Count(tt.v, tt.method, tt.d)
-			if got != tt.want {
-				t.Errorf("%s: got %d, want %d", tt.name, got, tt.want)
+			gotIn, gotOut := Count(tt.v, tt.method)
+			if gotIn != tt.wantIn || gotOut != tt.wantOut {
+				t.Errorf(
+					"%s: gotIn %d, wantIn %d, gotOut %d, wantOut %d",
+					tt.name,
+					gotIn, tt.wantIn,
+					gotOut, tt.wantOut,
+				)
 			}
 		})
 	}
